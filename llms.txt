@@ -1,0 +1,23 @@
+# NanoGen Studio: AI-Native Creative Suite
+
+Powerful AI image synthesis and professional merch mockup engine powered by Gemini 2.5 Flash Image.
+
+## Core Documentation
+- [Documentation Policy](docs/DOC_POLICY.md)
+- [Security Model](docs/SECURITY.md)
+- [System Architecture](docs/ARCHITECTURE.md)
+- [Application Framework](docs/FRAMEWORK.md)
+- [Project Changelog](docs/CHANGELOG.md)
+
+## Agent Configuration
+- [Documentation Authority Prompt](docs/AGENTS_DOCUMENTATION_AUTHORITY.md)
+
+## Full Context
+- [Unified Documentation Index](llms-full.txt)
+
+---
+**Provenance:**
+- Source: standard
+- Locator: llms.txt
+- Confidence: HIGH
+- Last Verified: 2024-05-24

@@ -1,0 +1,98 @@
+name: Docs Authority (Validate + Build llms-full)
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "docs/**"
+      - "ADR/**"
+      - "scripts/**"
+      - "llms.txt"
+  push:
+    branches: [ main ]
+    paths:
+      - "docs/**"
+      - "ADR/**"
+      - "scripts/**"
+      - "llms.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Required files present
+        run: |
+          set -euo pipefail
+          req=(
+            "docs/SECURITY.md"
+            "docs/ARCHITECTURE.md"
+            "docs/FRAMEWORK.md"
+            "docs/CHANGELOG.md"
+            "docs/DOC_POLICY.md"
+            "docs/AGENTS_DOCUMENTATION_AUTHORITY.md"
+            "llms.txt"
+          )
+          for f in "${req[@]}"; do
+            test -f "$f" || (echo "❌ Missing required file: $f" && exit 1)
+          done
+
+      - name: Build llms-full.txt
+        run: |
+          python scripts/build-llms-docs.py
+          test -f llms-full.txt || (echo "❌ llms-full.txt not generated" && exit 1)
+
+      - name: Basic internal link sanity (docs/*.md only)
+        run: |
+          set -euo pipefail
+          broken=$(grep -RohE '\]\((docs/[^)]+\.md)\)' docs | sed -E 's/.*\((docs\/[^)]+\.md)\).*/\1/' | sort -u | while read -r p; do test -f "$p" || echo "$p"; done)
+          if [ -n "${broken}" ]; then
+            echo "❌ Broken local doc links found:"
+            echo "${broken}"
+            exit 1
+          fi
+
+  auto-commit-llms-full:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [validate-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Guardrail: automation kill-switch
+        run: |
+          if [ "${DOC_AUTOMATION_ENABLED:-false}" != "true" ]; then
+            echo "DOC_AUTOMATION_ENABLED is not true; skipping auto-commit."
+            exit 0
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Rebuild llms-full.txt
+        run: python scripts/build-llms-docs.py
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.email "action@github.com"
+          git config user.name "Docs Authority Bot"
+          git add llms-full.txt
+          git diff --staged --quiet && exit 0
+          git commit -m "docs: rebuild llms-full.txt [skip ci]"
+          git push
