@@ -10,17 +10,22 @@
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.3",
-    "lucide-react": "^0.555.0",
-    "three": "^0.182.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.2",
-    "@react-three/postprocessing": "^3.0.4"
+    "@react-three/postprocessing": "^3.0.4",
+    "@testing-library/react": "^16.3.1",
+    "lucide-react": "^0.555.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.3",
+    "three": "^0.182.0"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "identity-obj-proxy": "^3.0.0",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
