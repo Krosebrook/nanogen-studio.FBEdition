@@ -44,7 +44,7 @@ export interface MarketingCopyData {
 
 class AICoreService {
   private static instance: AICoreService;
-  private readonly DEFAULT_RETRIES = 3;
+  private readonly DEFAULT_RETRIES = 2;
 
   private constructor() {}
 
@@ -53,12 +53,9 @@ class AICoreService {
     return AICoreService.instance;
   }
 
-  /**
-   * Retrieves the API key.
-   */
   private getApiKey(): string {
     const apiKey = process.env.API_KEY;
-    if (!apiKey) throw new AuthenticationError("API_KEY_MISSING: Environment key unavailable. Please check your .env configuration.");
+    if (!apiKey) throw new AuthenticationError("api_key_missing");
     return apiKey;
   }
 
@@ -66,102 +63,79 @@ class AICoreService {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Maps raw errors to strongly-typed AppError subclasses with user-friendly messages.
-   */
   private normalizeError(error: any): AppError {
     if (error instanceof AppError) return error;
     
-    // Extract deep error message (Google GenAI often nests errors)
     const rawMessage = error?.message || error?.toString() || "Unknown error";
     const status = error?.status || error?.response?.status;
     const lowerMsg = rawMessage.toLowerCase();
 
-    // 1. Rate Limiting & Quotas (429)
-    if (status === 429 || lowerMsg.includes("429") || lowerMsg.includes("quota") || lowerMsg.includes("exhausted")) {
-       return new RateLimitError(); // Default message is "Generation throughput exceeded..."
+    if (status === 429 || lowerMsg.includes("quota")) {
+       return new RateLimitError("429: API quota exhausted or rate limit exceeded.");
     }
-
-    // 2. Authentication & Billing (400/401/403)
-    if (status === 401 || lowerMsg.includes("api key") || lowerMsg.includes("unauthenticated")) {
-       return new AuthenticationError("INVALID_API_KEY: The provided API key is invalid or expired. Please update your credentials.");
+    if (lowerMsg.includes("api key not valid") || lowerMsg.includes("invalid api key")) {
+       return new AuthenticationError("Invalid API Key: The provided API key is invalid or expired.");
     }
-    
-    if (status === 403 || lowerMsg.includes("permission denied")) {
+    if (lowerMsg.includes("permission denied")) {
        if (lowerMsg.includes("billing")) {
-         return new AuthenticationError("BILLING_REQUIRED: The Google Cloud Project for this key needs billing enabled.");
+         return new AuthenticationError("Billing not enabled for the associated Google Cloud project.");
        }
        if (lowerMsg.includes("location") || lowerMsg.includes("region")) {
-         return new AuthenticationError("GEO_RESTRICTION: Google Gemini is not available in your current region.");
+         return new AuthenticationError("Service not available in your region.");
        }
-       return new AuthenticationError("ACCESS_DENIED: API access prohibited. Check project permissions.");
+       return new AuthenticationError("Permission Denied: Check project permissions.");
     }
-
-    // 3. Safety & Policy (Blocked)
-    if (lowerMsg.includes("safety") || lowerMsg.includes("blocked") || lowerMsg.includes("harmful")) {
-       return new SafetyError("SAFETY_VIOLATION: The prompt or input image triggered safety filters. Try simplifying your request.");
+    if (lowerMsg.includes("safety")) {
+       return new SafetyError("Safety filters triggered by the prompt or image.");
     }
-
-    // 4. Model Availability (404)
     if (status === 404 || lowerMsg.includes("not found")) {
-       return new ApiError("MODEL_UNAVAILABLE: The requested AI model version is not found or deprecated.", 404);
+       return new ApiError(`Model ${status}: The requested AI model is not available.`);
     }
-
-    // 5. System Instability (500/502/503/504)
-    if ([500, 502, 503, 504].includes(status) || lowerMsg.includes("overloaded") || lowerMsg.includes("busy") || lowerMsg.includes("capacity")) {
-       return new ApiError("SYSTEM_OVERLOAD: Google AI servers are experiencing high traffic. Please retry in a moment.", 503);
+    if (status >= 500 || lowerMsg.includes("overloaded")) {
+       return new ApiError(`Server Error ${status}: AI engine is overloaded. Please retry.`);
     }
-
-    // 6. Network / Connectivity
-    if (lowerMsg.includes("fetch") || lowerMsg.includes("network") || lowerMsg.includes("connection")) {
-       return new ApiError("NETWORK_ERROR: Unable to connect to Google AI services. Please check your internet connection.", 0);
+    if (lowerMsg.includes("fetch") || lowerMsg.includes("network")) {
+       return new ApiError("Network Error: Unable to connect to Google AI. Check internet connection.");
     }
-
-    // 7. Request Format (400)
     if (status === 400 || lowerMsg.includes("invalid argument")) {
-       if (lowerMsg.includes("image")) return new ApiError("INVALID_IMAGE: The provided image format or size is not supported.", 400);
-       return new ApiError("INVALID_REQUEST: The request parameters are invalid. Check your prompt or configuration.", 400);
+       if (lowerMsg.includes("image")) return new ApiError("Invalid Image format or size.", 400);
+       return new ApiError("Invalid Argument: The request was malformed. Check prompt or config.", 400);
     }
 
-    return new ApiError(`GENAI_ERROR: ${rawMessage}`, status || 500);
+    // Fallback error that will be caught by the generic UI message
+    return new ApiError(rawMessage, status || 500);
   }
 
-  /**
-   * Primary Entry Point: Orchestrates content generation with exponential backoff retry logic.
-   */
   public async generate(
     prompt: string,
     images: string[] = [],
     config: AIRequestConfig
   ): Promise<AIResponse> {
-    const retries = config.maxRetries ?? this.DEFAULT_RETRIES;
     let lastError: any;
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    for (let attempt = 0; attempt <= (config.maxRetries ?? this.DEFAULT_RETRIES); attempt++) {
       try {
         const apiKey = this.getApiKey();
         const ai = new GoogleGenAI({ apiKey });
         
-        return await this.executeRequest(ai, prompt, images, config);
+        const response = await this.executeRequest(ai, prompt, images, config);
+        return this.parseResponse(response); // Success
+
       } catch (error) {
         const normalized = this.normalizeError(error);
         lastError = normalized;
 
-        // Fail immediately on non-transient errors
-        if (
-          normalized instanceof SafetyError || 
-          normalized instanceof AuthenticationError || 
-          (normalized instanceof ApiError && normalized.statusCode >= 400 && normalized.statusCode < 500 && normalized.statusCode !== 429)
-        ) {
+        // Non-retryable errors
+        if (normalized instanceof AuthenticationError || normalized instanceof SafetyError || (normalized instanceof ApiError && normalized.statusCode === 400)) {
           throw normalized;
         }
 
-        if (attempt < retries) {
-          // Exponential backoff with jitter: 1s, 2s, 4s, 8s + random jitter
+        if (attempt < (config.maxRetries ?? this.DEFAULT_RETRIES)) {
           const delay = Math.pow(2, attempt) * 1000 + (Math.random() * 500);
-          logger.warn(`AICore Retry ${attempt + 1}/${retries}: ${normalized.message}`);
+          logger.warn(`AICore Retry ${attempt + 1}: ${normalized.message}`);
           await this.sleep(delay);
-          continue;
+        } else {
+          logger.error(`AICore Final Error: ${normalized.message}`);
         }
       }
     }
@@ -173,55 +147,29 @@ class AICoreService {
     prompt: string,
     images: string[] = [],
     config: AIRequestConfig
-  ): Promise<AIResponse> {
+  ): Promise<GenerateContentResponse> {
     const parts: Part[] = images.filter(Boolean).map(img => ({
       inlineData: { data: cleanBase64(img), mimeType: getMimeType(img) }
     }));
     parts.push({ text: prompt || "Analyze input assets." });
 
     const generationConfig: any = {
-      systemInstruction: config.systemInstruction,
-      responseMimeType: config.responseMimeType,
-      temperature: config.temperature ?? 0.7,
-      seed: config.seed,
+        temperature: config.temperature ?? 0.7,
+        maxOutputTokens: config.maxOutputTokens,
+        responseMimeType: config.responseMimeType,
+        seed: config.seed,
     };
-
-    // Thinking Logic Configuration
-    if (config.thinkingBudget !== undefined) {
-      const budget = config.thinkingBudget;
-      generationConfig.thinkingConfig = { thinkingBudget: budget };
-      // Ensure maxOutputTokens is larger than thinking budget
-      if (config.maxOutputTokens) {
-        generationConfig.maxOutputTokens = Math.max(config.maxOutputTokens, budget + 1024);
-      } else {
-        generationConfig.maxOutputTokens = budget + 2048;
-      }
-    } else if (config.maxOutputTokens) {
-      generationConfig.maxOutputTokens = config.maxOutputTokens;
-    }
 
     if (config.useSearch) generationConfig.tools = [{ googleSearch: {} }];
 
-    // Image Model Configuration
-    if (config.model.includes('image')) {
-      generationConfig.imageConfig = { aspectRatio: config.aspectRatio || "1:1" };
-      if (config.model === 'gemini-3-pro-image-preview') {
-        generationConfig.imageConfig.imageSize = config.imageSize || "1K";
-      }
-    }
-
-    const response: GenerateContentResponse = await ai.models.generateContent({
+    return ai.models.generateContent({
       model: config.model,
       contents: { parts },
       config: generationConfig,
+      systemInstruction: config.systemInstruction ? { role: 'user', parts: [{ text: config.systemInstruction }] } : undefined,
     });
-
-    return this.parseResponse(response);
   }
 
-  /**
-   * Generates video using Veo 3.1 model with polling and error mapping.
-   */
   public async generateVideo(prompt: string, image: string): Promise<string | null> {
     try {
       const apiKey = this.getApiKey();
@@ -230,85 +178,62 @@ class AICoreService {
       let operation = await ai.models.generateVideos({
         model: 'veo-3.1-fast-generate-preview',
         prompt: prompt,
-        image: {
-          imageBytes: cleanBase64(image),
-          mimeType: getMimeType(image),
-        },
-        config: {
-          numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio: '16:9'
-        }
+        image: { imageBytes: cleanBase64(image), mimeType: getMimeType(image) },
+        config: { resolution: '720p', aspectRatio: '16:9' }
       });
 
-      // Poll for completion (Veo takes time)
-      const MAX_POLLS = 60; // 5 minutes max
-      let polls = 0;
-      
-      while (!operation.done) {
-          if (polls++ > MAX_POLLS) throw new ApiError("TIMEOUT: Video generation took too long.", 408);
-          await this.sleep(5000); // 5 second polling interval
-          operation = await ai.operations.getVideosOperation({operation: operation});
+      const MAX_POLLS = 60;
+      for (let i = 0; i < MAX_POLLS; i++) {
+        if (operation.done) {
+          const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+          return videoUri ? `${videoUri}&key=${apiKey}` : null;
+        }
+        await this.sleep(5000);
+        operation = await ai.operations.getVideosOperation({ operation });
       }
-
-      const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (videoUri) {
-          return `${videoUri}&key=${apiKey}`;
-      }
-      return null;
+      throw new ApiError("TIMEOUT: Video generation took too long.", 408);
     } catch (error) {
       logger.error('Video Generation Error:', error);
       throw this.normalizeError(error);
     }
   }
 
-  /**
-   * Generates structured Marketing Copy (SEO) using Flash model.
-   */
   public async generateMarketingCopy(productName: string, image: string): Promise<MarketingCopyData> {
-    const prompt = `Analyze this product image of "${productName}" and generate optimized marketing copy for Shopify/Etsy.
-    Return valid JSON with keys: "title" (SEO title, <80 chars), "description" (engaging, ~100 words), "tags" (array of 5-7 strings).
-    Focus on visual details, mood, and material quality inferred from the image.`;
+    const prompt = `Analyze this product image of "${productName}" and generate optimized marketing copy (SEO). Return valid JSON with keys: "title" (<60 chars), "description" (~100 words), "tags" (array of 5-7 keywords).`;
 
     try {
       const response = await this.generate(prompt, [image], {
         model: 'gemini-3-flash-preview',
         responseMimeType: "application/json",
-        temperature: 0.7
+        temperature: 0.8
       });
-
-      const text = response.text || "{}";
-      return JSON.parse(text) as MarketingCopyData;
+      return JSON.parse(response.text || "{}") as MarketingCopyData;
     } catch (e) {
       logger.error("Marketing Copy Gen Error", e);
-      throw this.normalizeError(e); // Ensure specific error is thrown
+      throw this.normalizeError(e);
     }
   }
 
   private parseResponse(response: GenerateContentResponse): AIResponse {
-    const candidate = response.candidates?.[0];
-    
-    // Check for prompt feedback blocks
     if (response.promptFeedback?.blockReason) {
-         throw new SafetyError(`PROMPT_BLOCKED: ${response.promptFeedback.blockReason}`);
+      throw new SafetyError(`Prompt blocked due to ${response.promptFeedback.blockReason}`);
     }
 
+    const candidate = response.candidates?.[0];
     if (!candidate) {
-         throw new ApiError("ZERO_CANDIDATES: The model returned no results. Try adjusting your prompt.", 500);
+      // This is a critical failure. Map to an error the UI understands.
+      throw new ApiError("Invalid Argument: The model returned no content. This can be due to a restrictive safety setting, a confusing prompt, or an internal error. Please try simplifying your prompt.", 400);
     }
 
-    // Check Candidate Finish Reasons for Safety/Recitation blocks
     if (candidate.finishReason && candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS") {
-        if (candidate.finishReason === "SAFETY") {
-             throw new SafetyError("GENERATION_BLOCKED: Content flagged by safety filters. Avoid restricted topics or imagery.");
-        }
-        if (candidate.finishReason === "RECITATION") {
-             throw new SafetyError("COPYRIGHT_BLOCK: Content matched protected intellectual property.");
-        }
-        if (candidate.finishReason === "OTHER") {
-             throw new ApiError("GENERATION_FAILED: Unknown model error occurred.", 500);
-        }
-        throw new ApiError(`GENERATION_STOPPED: ${candidate.finishReason}`, 500);
+      if (candidate.finishReason === "SAFETY") {
+        throw new SafetyError("Generation blocked by safety filters on the output.");
+      }
+      if (candidate.finishReason === "RECITATION") {
+        throw new SafetyError("Generation blocked due to potential copyright recitation.");
+      }
+      // Any other reason is likely a problem with the prompt or a temporary model issue.
+      throw new ApiError(`Invalid Argument: Generation failed with reason '${candidate.finishReason}'. Try a simpler prompt.`, 400);
     }
 
     const result: AIResponse = {
