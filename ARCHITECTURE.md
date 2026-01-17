@@ -17,7 +17,7 @@ src/
 │   ├── hooks/              # Global state & effects
 │   └── utils/              # Pure functions (Canvas, File, Image)
 └── services/               # Infrastructure Layer
-    └── ai-core.ts          # Central Gemini API Service (SDK v1.30+)
+    └── ai-core.ts          # Central Gemini API Service
 ```
 
 ## 2. Layout Strategy: CSS Grid & Clamping
@@ -38,16 +38,24 @@ Generating AI content is asynchronous and prone to safety blocks. Our UX address
 
 ## 4. AI Service Implementation
 
-The `AICoreService` is a robust facade for the `@google/genai` SDK:
+The `AICoreService` is a robust facade for the `@google/genai` SDK, specifically leveraging the **Gemini 2.5 Flash Image** model.
 
 - **Stateless Client Initialization**: Fresh `GoogleGenAI` instances are created per-call to ensure dynamic environment keys (from `process.env.API_KEY`) are respected without stale closures.
-- **Token Budget Coordination**: Automatically manages `thinkingBudget` and `maxOutputTokens` to prevent truncated or empty responses during deep reasoning.
+- **Token Budget Coordination**: Automatically manages `thinkingBudget` and `maxOutputTokens` to prevent truncated or empty responses during deep reasoning. This is crucial for features like "Deep Reasoning" and "Contextual Analysis."
 - **Resilient Retry Logic**: Implements exponential backoff with jitter for transient 429/503 errors.
+- **Search Grounding**: For features requiring real-world context, the service has a mechanism to inject relevant information from Google Search into the prompt.
+- **Platform Connectors**: The architecture includes a pattern for "platform connectors" (e.g., Discord, AWS S3). These are designed as modular, stateless functions that take the output from the AI service and transform it into the required format for the target platform. Sensitive keys are handled client-side and stored in `localStorage` to enhance security.
 
 ## 5. Security & Privacy
 
 - **Local-First Keys**: Platform credentials for Shopify, Etsy, etc., are stored exclusively in the user's `localStorage` and never persist on any server.
 - **Prompt Sanitization**: Base64 data is cleaned and validated before being passed to the Generative model.
+
+## 6. Accessibility
+
+- **ARIA-Landmarks**: Distinct regions for the Sidebar, Viewport, and Navigation are defined with appropriate ARIA roles to improve screen reader navigation.
+- **Focus Management**: Focus is programmatically managed to ensure a logical and intuitive user experience, especially within modals and configuration panels.
+- **Semantic Tooltips**: All interactive elements are equipped with descriptive tooltips to provide context and improve usability.
 
 ---
 
