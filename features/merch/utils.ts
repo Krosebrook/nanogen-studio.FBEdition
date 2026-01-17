@@ -60,17 +60,6 @@ export const getErrorSuggestion = (errorMsg: string, hasBackground: boolean): st
     return "Format Error: The uploaded file type is not supported. Action: Please use standard JPG, PNG, or WEBP image files.";
   }
 
-  // 0.1 Export & Canvas Rendering Errors (New)
-  if (msg.includes("texture_load") || msg.includes("resource unreachable")) {
-    return "Rendering Security: Cross-origin resource blocked. Action: The source image URL is not accessible to the canvas engine. Please re-upload the logo locally.";
-  }
-  if (msg.includes("canvas_context") || msg.includes("2d context")) {
-    return "System Limitation: Browser graphics memory exhausted. Action: Your device is running low on memory. Close other tabs or export at a lower quality.";
-  }
-  if (msg.includes("export_failure")) {
-    return "Export Failed: Encoding error. Action: Try switching the export format to JPG or reducing the quality slider slightly.";
-  }
-  
   // 1. Safety Filters (The most common issue with image generation)
   if (msg.includes("safety") || msg.includes("blocked") || msg.includes("candidate")) {
     if (msg.includes("face") || msg.includes("person") || msg.includes("human") || msg.includes("child")) {
@@ -102,7 +91,10 @@ export const getErrorSuggestion = (errorMsg: string, hasBackground: boolean): st
 
   // 5. Billing & Authentication
   if (msg.includes("billing") || msg.includes("project") || msg.includes("enable")) {
-    return "Account Config: Billing not enabled. Action: The API key provided belongs to a Google Cloud Project without active billing. Please enable billing in the Google Cloud Console to use the Gemini 2.5/3.0 models.";
+    return "Account Config: Billing not enabled. Action: The API key provided belongs to a Google Cloud Project without active billing. Please enable billing in the Google Cloud Console to use the Gemini Pro models.";
+  }
+  if (msg.includes("api_key_missing")) {
+    return "Authentication: Missing API Key. Action: The application is not configured with a Google AI API key. Please follow the setup instructions to provide a valid key.";
   }
   if (msg.includes("403") || msg.includes("permission") || msg.includes("valid key") || msg.includes("api key")) {
     return "Authentication: Invalid API Credentials. Action: Your API Key appears to be invalid or expired. Please check your environment variables or re-enter your key.";
