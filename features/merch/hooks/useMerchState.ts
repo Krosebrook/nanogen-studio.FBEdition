@@ -1,8 +1,9 @@
+
 import { useState, useCallback, useEffect } from 'react';
 import { MerchProduct, MarketingData } from '../types';
 import { MERCH_PRODUCTS } from '../data/products';
 import { readImageFile } from '@/shared/utils/file';
-import { aiCore } from '@/services/ai-core';
+import { api } from '@/services/api'; // Replaced aiCore with the new api service
 import { constructMerchPrompt, getErrorSuggestion, getVariationPrompts } from '../utils';
 import { logger } from '@/shared/utils/logger';
 
@@ -29,7 +30,6 @@ export interface TextOverlayState {
 const STORAGE_KEY = 'nanogen_merch_session';
 
 export const useMerchController = (onImageGenerated?: (url: string, prompt: string) => void) => {
-  // State Initialization from LocalStorage
   const [assets, setAssets] = useState<{ logo: string | null; bg: string | null }>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -77,7 +77,6 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
   const [isGeneratingVariations, setIsGeneratingVariations] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // New Features State
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   const [marketingData, setMarketingData] = useState<MarketingData | null>(null);
@@ -85,7 +84,6 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
   const [isPublishing, setIsPublishing] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
 
-  // Persistence Effect
   useEffect(() => {
     const session = {
       logo: assets.logo,
@@ -124,7 +122,7 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
     setMarketingData(null);
     try {
       const prompt = constructMerchPrompt(config.product, config.style, !!assets.bg);
-      const res = await aiCore.generate(prompt, assets.bg ? [assets.logo, assets.bg] : [assets.logo], {
+      const res = await api.generate(prompt, assets.bg ? [assets.logo, assets.bg] : [assets.logo], {
         model: 'gemini-2.5-flash-image'
       });
       if (res.image) {
@@ -145,10 +143,10 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
     try {
       const prompts = getVariationPrompts(config.product, config.style, !!assets.bg);
       const results = await Promise.all(
-        prompts.map(p => aiCore.generate(p, assets.bg ? [assets.logo, assets.bg] : [assets.logo], {
+        prompts.map(p => api.generate(p, assets.bg ? [assets.logo, assets.bg] : [assets.logo], {
           model: 'gemini-2.5-flash-image',
           maxRetries: 1
-        }).catch(() => null)) // Swallow individual errors for variations
+        }).catch(() => null))
       );
       const images = results.map(r => r?.image).filter((img): img is string => !!img);
       setVariations(images);
@@ -161,22 +159,12 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
 
   const handleGenerateVideo = useCallback(async () => {
     if (!resultImage || isVideoGenerating) return;
-    
-    // Check for Paid API Key for Veo
-    const studio = (window as any).aistudio;
-    if (studio?.hasSelectedApiKey) {
-        const hasKey = await studio.hasSelectedApiKey();
-        if (!hasKey && studio.openSelectKey) {
-            await studio.openSelectKey();
-        }
-    }
-
     setIsVideoGenerating(true);
     setError(null);
     try {
       const prompt = `Cinematic slow-motion product reveal of ${config.product.name}. Professional lighting, 4k quality.`;
-      const url = await aiCore.generateVideo(prompt, resultImage);
-      if (url) setVideoUrl(url);
+      const res = await api.generateVideo(prompt, resultImage);
+      if (res.videoUrl) setVideoUrl(res.videoUrl);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -185,27 +173,33 @@ export const useMerchController = (onImageGenerated?: (url: string, prompt: stri
   }, [resultImage, config.product.name, isVideoGenerating]);
 
   const handleGenerateMarketing = useCallback(async () => {
-      if (!resultImage || isMarketingGenerating) return;
-      setIsMarketingGenerating(true);
-      setError(null);
-      try {
-          const data = await aiCore.generateMarketingCopy(config.product.name, resultImage);
-          setMarketingData(data);
-      } catch (err: any) {
-          setError(err.message);
-      } finally {
-          setIsMarketingGenerating(false);
-      }
+    if (!resultImage || isMarketingGenerating) return;
+    setIsMarketingGenerating(true);
+    setError(null);
+    try {
+      const data = await api.generateMarketingCopy(config.product.name, resultImage);
+      setMarketingData(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsMarketingGenerating(false);
+    }
   }, [resultImage, config.product.name, isMarketingGenerating]);
 
   const handlePublish = useCallback(async (platformId: string, keys: Record<string, string>) => {
-      setIsPublishing(true);
-      // Simulate API call to backend service
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      setIsPublishing(false);
+    if (!resultImage) return false;
+    setIsPublishing(true);
+    try {
+      await api.publish(platformId, keys, resultImage);
       setShowPublishModal(false);
-      return true; 
-  }, []);
+      return true;
+    } catch (err: any) {
+      setError(err.message);
+      return false;
+    } finally {
+      setIsPublishing(false);
+    }
+  }, [resultImage]);
 
   const clearLogo = () => {
     setAssets(p => ({ ...p, logo: null }));
